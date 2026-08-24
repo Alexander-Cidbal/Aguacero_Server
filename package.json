@@ -1,0 +1,14 @@
+{
+  "name": "aguacero-server",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm --workspace @aguacero/backend run dev",
+    "dev:frontend": "npm --workspace frontend run dev -- --host 0.0.0.0",
+    "build:frontend": "npm --workspace frontend run build",
+    "deploy:frontend": "npm --workspace frontend run deploy",
+    "dev:all": "npm run dev:backend & npm run dev:frontend"
+  }
+}
