@@ -15,6 +15,9 @@ const EVERYTHING_URL = process.env.EVERYTHING_URL || 'http://127.0.0.1:8080';
 // location described in the architecture document.
 const CACHE_DIR = path.resolve(__dirname, '../../../.cache/thumbs');
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif']);
+// Everything HTTP server only accepts these values for the "sort" query
+// string parameter (see References/EverythingHTTP_INFO.md).
+const ALLOWED_SORT_FIELDS = new Set(['name', 'path', 'date_modified', 'size']);
 
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
@@ -58,6 +61,30 @@ function parseSize(rawSize) {
   return Number.isFinite(size) ? size : 0;
 }
 
+// Builds an Everything search-syntax clause that restricts results to the
+// given extensions, e.g. "ext:jpg;png;gif". Everything's "ext:" function
+// accepts a semicolon-separated list of extensions (without leading dots).
+function buildExtensionClause(rawExt) {
+  const extensions = String(rawExt || '')
+    .split(',')
+    .map((value) => value.trim().replace(/^\./, '').toLowerCase())
+    .filter(Boolean);
+
+  if (!extensions.length) return '';
+
+  return `ext:${extensions.join(';')}`;
+}
+
+function parseSortField(rawSort) {
+  const sort = String(rawSort || '').trim().toLowerCase();
+  return ALLOWED_SORT_FIELDS.has(sort) ? sort : 'name';
+}
+
+function parseAscending(rawAscending) {
+  if (rawAscending === undefined) return true;
+  return String(rawAscending) !== '0' && String(rawAscending).toLowerCase() !== 'false';
+}
+
 function serializeResult(entry) {
   const type = entry.type === 'folder' ? 'folder' : 'file';
   const fileName = String(entry.name || '').trim();
@@ -88,19 +115,26 @@ app.get('/api/search', async (req, res) => {
   const q = String(req.query.q || '').trim();
   const offset = Number(req.query.offset || 0);
   const count = Number(req.query.count || 50);
+  const extensionClause = buildExtensionClause(req.query.ext);
+  const sort = parseSortField(req.query.sort);
+  const ascending = parseAscending(req.query.ascending);
 
   if (!q) {
     return res.status(400).json({ error: 'Query parameter "q" is required.' });
   }
 
   try {
+    const search = extensionClause ? `${extensionClause} ${q}` : q;
+
     const params = new URLSearchParams({
-      search: q,
+      search,
       json: '1',
       offset: String(offset),
       count: String(count),
       path_column: '1',
       size_column: '1',
+      sort,
+      ascending: ascending ? '1' : '0',
     });
 
     const response = await fetch(`${EVERYTHING_URL}/?${params.toString()}`);

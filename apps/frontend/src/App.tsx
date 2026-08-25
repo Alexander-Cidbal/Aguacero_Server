@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import './App.css'
+import {
+  DEFAULT_FILE_TYPE_FILTER_ID,
+  DEFAULT_SORT_OPTION_ID,
+  FILE_TYPE_FILTERS,
+  SORT_OPTIONS,
+} from './searchFilters'
 
 type SearchResult = {
   name: string
@@ -41,6 +47,8 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [columnCount, setColumnCount] = useState(3)
+  const [fileTypeFilterId, setFileTypeFilterId] = useState(DEFAULT_FILE_TYPE_FILTER_ID)
+  const [sortOptionId, setSortOptionId] = useState(DEFAULT_SORT_OPTION_ID)
   const parentRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -74,10 +82,23 @@ function App() {
       setError('')
 
       try {
-        const response = await fetch(
-          `${BACKEND_URL}/api/search?q=${encodeURIComponent(trimmedQuery)}&count=200`,
-          { signal: controller.signal },
-        )
+        const fileTypeFilter = FILE_TYPE_FILTERS.find((filter) => filter.id === fileTypeFilterId)
+        const sortOption = SORT_OPTIONS.find((option) => option.id === sortOptionId) ?? SORT_OPTIONS[0]
+
+        const params = new URLSearchParams({
+          q: trimmedQuery,
+          count: '200',
+          sort: sortOption.sort,
+          ascending: sortOption.ascending ? '1' : '0',
+        })
+
+        if (fileTypeFilter?.extensions?.length) {
+          params.set('ext', fileTypeFilter.extensions.join(','))
+        }
+
+        const response = await fetch(`${BACKEND_URL}/api/search?${params.toString()}`, {
+          signal: controller.signal,
+        })
 
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`)
@@ -98,13 +119,16 @@ function App() {
       window.clearTimeout(timeoutId)
       controller.abort()
     }
-  }, [debouncedQuery])
+  }, [debouncedQuery, fileTypeFilterId, sortOptionId])
 
   const rowCount = Math.ceil(results.length / columnCount)
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 220,
+    // Initial guess only: real row height (thumbnail + text + row spacing)
+    // is measured dynamically via `measureElement` below, since result
+    // cards can wrap to different heights depending on file name length.
+    estimateSize: () => 238,
     overscan: 4,
   })
 
@@ -131,6 +155,38 @@ function App() {
         </div>
       </header>
 
+      <section className="filters-row">
+        <label className="filter-field">
+          <span>Tipo de archivo</span>
+          <select
+            value={fileTypeFilterId}
+            onChange={(event) => setFileTypeFilterId(event.target.value)}
+            aria-label="Filtrar por tipo de archivo"
+          >
+            {FILE_TYPE_FILTERS.map((filter) => (
+              <option key={filter.id} value={filter.id}>
+                {filter.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="filter-field">
+          <span>Ordenar por</span>
+          <select
+            value={sortOptionId}
+            onChange={(event) => setSortOptionId(event.target.value)}
+            aria-label="Ordenar resultados"
+          >
+            {SORT_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
       <section className="status-row">
         <span>{isLoading ? 'Buscando…' : `${results.length} resultados`}</span>
         {error ? <span className="error-pill">{error}</span> : null}
@@ -150,6 +206,8 @@ function App() {
               return (
                 <div
                   key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
                   className="grid-row"
                   style={{
                     position: 'absolute',

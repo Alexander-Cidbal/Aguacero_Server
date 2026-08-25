@@ -180,3 +180,6 @@ Interfaz de usuario web móvil optimizada para alto rendimiento.
 4. **Desplegar Túnel:**
 * Descargar `cloudflared.exe`.
 * Autenticar y crear túnel apuntando a `
+
+//npm run dev:backend
+//npm run dev:frontend
