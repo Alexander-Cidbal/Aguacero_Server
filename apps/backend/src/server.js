@@ -25,7 +25,7 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
 }));
 
-function parseImagePath(rawPath) {
+function parseFilePath(rawPath) {
   if (!rawPath) return null;
 
   const decoded = decodeURIComponent(String(rawPath).trim());
@@ -98,6 +98,8 @@ function serializeResult(entry) {
     type,
     isImage,
     thumbnailUrl: isImage ? `/api/thumbnail?path=${encodeURIComponent(fullPath)}` : null,
+    previewUrl: isImage ? `/api/preview?path=${encodeURIComponent(fullPath)}` : null,
+    downloadUrl: type === 'file' ? `/api/download?path=${encodeURIComponent(fullPath)}` : null,
   };
 }
 
@@ -163,7 +165,7 @@ app.get('/api/search', async (req, res) => {
 });
 
 app.get('/api/thumbnail', async (req, res) => {
-  const filePath = parseImagePath(req.query.path);
+  const filePath = parseFilePath(req.query.path);
   const width = Math.max(32, Math.min(800, Number(req.query.w || 200)));
 
   if (!filePath) {
@@ -195,6 +197,56 @@ app.get('/api/thumbnail', async (req, res) => {
       details: error.message,
     });
   }
+});
+
+// Serves the original, full-resolution image file (unlike /api/thumbnail,
+// which returns a resized/cached preview) for use in the frontend's
+// lightbox. Sent inline so it renders directly instead of prompting a
+// download like /api/download does.
+app.get('/api/preview', (req, res) => {
+  const filePath = parseFilePath(req.query.path);
+
+  if (!filePath) {
+    return res.status(400).json({ error: 'Query parameter "path" is required.' });
+  }
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Image file not found.' });
+  }
+
+  if (!fs.statSync(filePath).isFile() || !isImageFile(filePath)) {
+    return res.status(415).json({ error: 'Unsupported file type for preview.' });
+  }
+
+  res.set('Content-Disposition', 'inline');
+  return res.sendFile(filePath);
+});
+
+app.get('/api/download', (req, res) => {
+  const filePath = parseFilePath(req.query.path);
+
+  if (!filePath) {
+    return res.status(400).json({ error: 'Query parameter "path" is required.' });
+  }
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found.' });
+  }
+
+  if (!fs.statSync(filePath).isFile()) {
+    return res.status(400).json({ error: 'Path does not point to a file.' });
+  }
+
+  const fileName = path.basename(filePath);
+
+  return res.download(filePath, fileName, (error) => {
+    if (error && !res.headersSent) {
+      res.status(500).json({
+        error: 'Unable to download file.',
+        details: error.message,
+      });
+    }
+  });
 });
 
 app.listen(PORT, () => {

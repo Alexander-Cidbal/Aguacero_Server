@@ -15,6 +15,8 @@ type SearchResult = {
   type: 'file' | 'folder'
   isImage: boolean
   thumbnailUrl?: string | null
+  previewUrl?: string | null
+  downloadUrl?: string | null
 }
 
 const BACKEND_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3000').replace(/\/$/, '')
@@ -27,6 +29,52 @@ function formatBytes(bytes: number) {
   const value = bytes / 1024 ** unitIndex
 
   return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+function getFileExtensionLabel(item: SearchResult) {
+  if (item.type === 'folder') return 'Carpeta'
+  const extension = item.name.split('.').pop()
+  return extension && extension !== item.name ? extension.toUpperCase() : 'Archivo'
+}
+
+// Triggers a browser download without navigating away from the current
+// page. The backend sets a `Content-Disposition: attachment` header, so a
+// programmatic anchor click is enough even for cross-origin URLs.
+function triggerDownload(url: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.rel = 'noopener'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+function DownloadIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" height="18px" width="18px">
+      <path
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        strokeWidth="2"
+        stroke="currentColor"
+        d="M6 21H18M12 3V17M12 17L17 12M12 17L7 12"
+      />
+    </svg>
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" height="20px" width="20px">
+      <path
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        strokeWidth="2"
+        stroke="currentColor"
+        d="M6 6L18 18M18 6L6 18"
+      />
+    </svg>
+  )
 }
 
 function useDebouncedValue(value: string, delay: number) {
@@ -49,6 +97,7 @@ function App() {
   const [columnCount, setColumnCount] = useState(3)
   const [fileTypeFilterId, setFileTypeFilterId] = useState(DEFAULT_FILE_TYPE_FILTER_ID)
   const [sortOptionId, setSortOptionId] = useState(DEFAULT_SORT_OPTION_ID)
+  const [previewItem, setPreviewItem] = useState<SearchResult | null>(null)
   const parentRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -64,6 +113,23 @@ function App() {
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
+
+  useEffect(() => {
+    if (!previewItem) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewItem(null)
+    }
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [previewItem])
 
   useEffect(() => {
     const trimmedQuery = debouncedQuery.trim()
@@ -218,32 +284,96 @@ function App() {
                     gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
                   }}
                 >
-                  {rowItems.map((item) => (
-                    <article key={item.path} className="result-card" role="listitem">
-                      <div className="thumb-wrap">
-                        {item.isImage && item.thumbnailUrl ? (
-                          <img src={`${BACKEND_URL}${item.thumbnailUrl}`} alt={item.name} loading="lazy" />
-                        ) : (
-                          <div className="file-placeholder">
-                            {item.type === 'folder'
-                              ? 'FOLDER'
-                              : item.name.split('.').pop()?.toUpperCase() || 'FILE'}
-                          </div>
-                        )}
-                      </div>
+                  {rowItems.map((item) => {
+                    const isZoomable = item.isImage && Boolean(item.previewUrl)
 
-                      <div className="meta">
-                        <strong title={item.name}>{item.name}</strong>
-                        <span>{formatBytes(item.size)}</span>
-                      </div>
-                    </article>
-                  ))}
+                    return (
+                      <article key={item.path} className="result-card" role="listitem">
+                        <div className={`thumb-wrap${isZoomable ? ' thumb-wrap--zoomable' : ''}`}>
+                          {item.type === 'file' && item.downloadUrl ? (
+                            <button
+                              type="button"
+                              className="download-btn"
+                              title="Download"
+                              aria-label={`Descargar ${item.name}`}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                triggerDownload(`${BACKEND_URL}${item.downloadUrl}`)
+                              }}
+                            >
+                              <DownloadIcon />
+                            </button>
+                          ) : null}
+
+                          {item.isImage && item.thumbnailUrl ? (
+                            <img
+                              className="thumb-image"
+                              src={`${BACKEND_URL}${item.thumbnailUrl}`}
+                              alt={item.name}
+                              loading="lazy"
+                              onClick={() => {
+                                if (isZoomable) setPreviewItem(item)
+                              }}
+                            />
+                          ) : (
+                            <div className="thumb-placeholder">
+                              <span>
+                                {item.type === 'folder'
+                                  ? 'FOLDER'
+                                  : `.${item.name.split('.').pop()?.toUpperCase() || 'FILE'}`}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="card-body">
+                          <h3 className="card-title" title={item.name}>
+                            {item.name}
+                          </h3>
+                          <div className="card-info">
+                            <span>{formatBytes(item.size)}</span>
+                            <span>{getFileExtensionLabel(item)}</span>
+                          </div>
+                        </div>
+                      </article>
+                    )
+                  })}
                 </div>
               )
             })}
           </div>
         )}
       </div>
+
+      {previewItem && previewItem.previewUrl ? (
+        <div
+          className="preview-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Vista previa de ${previewItem.name}`}
+          onClick={() => setPreviewItem(null)}
+        >
+          <div className="preview-panel" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="preview-close"
+              title="Cerrar"
+              aria-label="Cerrar"
+              onClick={() => setPreviewItem(null)}
+            >
+              <CloseIcon />
+            </button>
+            <img
+              className="preview-image"
+              src={`${BACKEND_URL}${previewItem.previewUrl}`}
+              alt={previewItem.name}
+            />
+            <p className="preview-caption" title={previewItem.name}>
+              {previewItem.name}
+            </p>
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }

@@ -125,61 +125,184 @@ h1 {
   grid-template-columns: repeat(var(--column-count), minmax(0, 1fr));
   gap: 16px;
   width: 100%;
-  padding: 0 4px 18px;
+  /* Extra top padding gives each card's overlapping thumbnail room to
+     "peek" above its own box without clipping into the row above it. */
+  padding: 24px 4px 18px;
 }
 
 .result-card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: #ffffff;
   border-radius: 16px;
-  overflow: hidden;
-  min-height: 200px;
+  box-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.45);
 }
 
 .thumb-wrap {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 160px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.12));
+  margin: -24px 8px 0;
+  aspect-ratio: 7 / 10;
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  box-shadow: 0 12px 20px -8px rgba(37, 99, 235, 0.55);
 }
 
-.thumb-wrap img {
+.thumb-wrap--zoomable .thumb-image {
+  cursor: zoom-in;
+}
+
+.download-btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 10px;
+  background: #1e3a8a;
+  color: #f1f5f9;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.download-btn:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.download-btn:focus-visible {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 2px;
+}
+
+.thumb-image {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.file-placeholder {
-  font-weight: 700;
-  font-size: 0.8rem;
-  letter-spacing: 0.08em;
-  color: #e9d5ff;
+.thumb-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  text-align: center;
 }
 
-.meta {
+.thumb-placeholder span {
+  font-weight: 700;
+  font-size: 1.6rem;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+}
+
+.card-body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 12px 12px;
-  color: #dbeafe;
+  gap: 8px;
+  padding: 12px;
 }
 
-.meta strong {
-  display: block;
+.card-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #1e293b;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.meta span {
-  color: #a5b4fc;
-  font-size: 0.8rem;
+.card-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(5, 7, 15, 0.85);
+  backdrop-filter: blur(2px);
+}
+
+.preview-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: min(92vw, 1300px);
+  max-height: 92vh;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  box-shadow: 0 30px 60px -18px rgba(0, 0, 0, 0.65);
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 10px;
+  display: block;
+}
+
+.preview-caption {
+  margin: 14px 0 0;
+  max-width: 100%;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-close {
+  position: absolute;
+  top: -16px;
+  right: -16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.preview-close:hover {
+  background: #dc2626;
+  transform: scale(1.05);
+}
+
+.preview-close:focus-visible {
+  outline: 2px solid #fca5a5;
+  outline-offset: 2px;
 }
 
 @media (max-width: 720px) {
