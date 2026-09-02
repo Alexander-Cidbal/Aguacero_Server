@@ -63,6 +63,20 @@ function DownloadIcon() {
   )
 }
 
+function RefreshIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" height="18px" width="18px">
+      <path
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        strokeWidth="2"
+        stroke="currentColor"
+        d="M4 4V9H4.582M20 20V15H19.419M4.582 9C5.83 6.39 8.446 4.5 11.5 4.5C15.09 4.5 18.056 6.947 18.87 10.25M19.419 15C18.171 17.61 15.554 19.5 12.5 19.5C8.91 19.5 5.944 17.053 5.13 13.75"
+      />
+    </svg>
+  )
+}
+
 function CloseIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" height="20px" width="20px">
@@ -74,6 +88,72 @@ function CloseIcon() {
         d="M6 6L18 18M18 6L6 18"
       />
     </svg>
+  )
+}
+
+type ThumbnailImageProps = {
+  item: SearchResult
+  refreshToken: number
+  isZoomable: boolean
+  onPreview: (item: SearchResult) => void
+}
+
+function ThumbnailImage({ item, refreshToken, isZoomable, onPreview }: ThumbnailImageProps) {
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const [hasError, setHasError] = useState(false)
+
+  // Reset loading/error state if path or refresh token changes
+  useEffect(() => {
+    setHasLoaded(false)
+    setHasError(false)
+  }, [item.path, refreshToken])
+
+  const extensionLabel =
+    item.type === 'folder'
+      ? 'FOLDER'
+      : `.${item.name.split('.').pop()?.toUpperCase() || 'FILE'}`
+
+  const shouldRenderImage = item.isImage && Boolean(item.thumbnailUrl) && !hasError
+
+  return (
+    <div className={`thumb-wrap${isZoomable ? ' thumb-wrap--zoomable' : ''}`}>
+      {item.type === 'file' && item.downloadUrl ? (
+        <button
+          type="button"
+          className="download-btn"
+          title="Download"
+          aria-label={`Descargar ${item.name}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            triggerDownload(`${BACKEND_URL}${item.downloadUrl}`)
+          }}
+        >
+          <DownloadIcon />
+        </button>
+      ) : null}
+
+      <div
+        className={`thumb-placeholder${
+          shouldRenderImage && !hasLoaded ? ' thumb-placeholder--loading' : ''
+        }`}
+      >
+        <span>{extensionLabel}</span>
+      </div>
+
+      {shouldRenderImage ? (
+        <img
+          className={`thumb-image${hasLoaded ? ' thumb-image--loaded' : ''}`}
+          src={`${BACKEND_URL}${item.thumbnailUrl}&v=${refreshToken}`}
+          alt={item.name}
+          loading="lazy"
+          onLoad={() => setHasLoaded(true)}
+          onError={() => setHasError(true)}
+          onClick={() => {
+            if (isZoomable) onPreview(item)
+          }}
+        />
+      ) : null}
+    </div>
   )
 }
 
@@ -98,6 +178,8 @@ function App() {
   const [fileTypeFilterId, setFileTypeFilterId] = useState(DEFAULT_FILE_TYPE_FILTER_ID)
   const [sortOptionId, setSortOptionId] = useState(DEFAULT_SORT_OPTION_ID)
   const [previewItem, setPreviewItem] = useState<SearchResult | null>(null)
+  const [isRefreshingThumbnails, setIsRefreshingThumbnails] = useState(false)
+  const [thumbnailRefreshToken, setThumbnailRefreshToken] = useState(0)
   const parentRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -185,7 +267,30 @@ function App() {
       window.clearTimeout(timeoutId)
       controller.abort()
     }
-  }, [debouncedQuery, fileTypeFilterId, sortOptionId])
+  }, [debouncedQuery, fileTypeFilterId, sortOptionId, thumbnailRefreshToken])
+
+  // Asks the backend to delete every cached thumbnail file, then re-runs the
+  // current search so results (and their thumbnails) are regenerated fresh.
+  const handleRefreshThumbnails = async () => {
+    setIsRefreshingThumbnails(true)
+    setError('')
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/thumbnails`, { method: 'DELETE' })
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`)
+      }
+
+      // Bumping this token re-triggers the search effect and busts the
+      // browser's image cache so freshly generated thumbnails are shown.
+      setThumbnailRefreshToken((value) => value + 1)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo limpiar la caché de miniaturas.')
+    } finally {
+      setIsRefreshingThumbnails(false)
+    }
+  }
 
   const rowCount = Math.ceil(results.length / columnCount)
   const virtualizer = useVirtualizer({
@@ -217,6 +322,16 @@ function App() {
           />
           <button type="button" onClick={() => setQuery('')}>
             Limpiar
+          </button>
+          <button
+            type="button"
+            className="refresh-thumbs-btn"
+            onClick={handleRefreshThumbnails}
+            disabled={isRefreshingThumbnails}
+            title="Regenerar miniaturas"
+            aria-label="Regenerar miniaturas"
+          >
+            <RefreshIcon />
           </button>
         </div>
       </header>
@@ -289,42 +404,12 @@ function App() {
 
                     return (
                       <article key={item.path} className="result-card" role="listitem">
-                        <div className={`thumb-wrap${isZoomable ? ' thumb-wrap--zoomable' : ''}`}>
-                          {item.type === 'file' && item.downloadUrl ? (
-                            <button
-                              type="button"
-                              className="download-btn"
-                              title="Download"
-                              aria-label={`Descargar ${item.name}`}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                triggerDownload(`${BACKEND_URL}${item.downloadUrl}`)
-                              }}
-                            >
-                              <DownloadIcon />
-                            </button>
-                          ) : null}
-
-                          {item.isImage && item.thumbnailUrl ? (
-                            <img
-                              className="thumb-image"
-                              src={`${BACKEND_URL}${item.thumbnailUrl}`}
-                              alt={item.name}
-                              loading="lazy"
-                              onClick={() => {
-                                if (isZoomable) setPreviewItem(item)
-                              }}
-                            />
-                          ) : (
-                            <div className="thumb-placeholder">
-                              <span>
-                                {item.type === 'folder'
-                                  ? 'FOLDER'
-                                  : `.${item.name.split('.').pop()?.toUpperCase() || 'FILE'}`}
-                              </span>
-                            </div>
-                          )}
-                        </div>
+                        <ThumbnailImage
+                          item={item}
+                          refreshToken={thumbnailRefreshToken}
+                          isZoomable={isZoomable}
+                          onPreview={setPreviewItem}
+                        />
 
                         <div className="card-body">
                           <h3 className="card-title" title={item.name}>

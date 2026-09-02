@@ -5,6 +5,13 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const sharp = require('sharp');
+const { readPsd, initializeCanvas } = require('ag-psd');
+
+// Initialize ag-psd without needing native node-canvas or C++ build tools
+initializeCanvas(
+  (width, height) => ({ width, height }),
+  (width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) })
+);
 
 dotenv.config();
 
@@ -15,6 +22,7 @@ const EVERYTHING_URL = process.env.EVERYTHING_URL || 'http://127.0.0.1:8080';
 // location described in the architecture document.
 const CACHE_DIR = path.resolve(__dirname, '../../../.cache/thumbs');
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif']);
+const PSD_EXTENSIONS = new Set(['.psd', '.psb']);
 // Everything HTTP server only accepts these values for the "sort" query
 // string parameter (see References/EverythingHTTP_INFO.md).
 const ALLOWED_SORT_FIELDS = new Set(['name', 'path', 'date_modified', 'size']);
@@ -34,14 +42,119 @@ function parseFilePath(rawPath) {
   return decoded;
 }
 
-function isImageFile(filePath) {
+function isPsdFile(filePath) {
   const ext = path.extname(String(filePath || '')).toLowerCase();
-  return IMAGE_EXTENSIONS.has(ext);
+  return PSD_EXTENSIONS.has(ext);
 }
 
-function getCachePath(filePath) {
+function isImageFile(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  return IMAGE_EXTENSIONS.has(ext) || PSD_EXTENSIONS.has(ext);
+}
+
+function getCachePath(filePath, suffix = '') {
   const digest = crypto.createHash('sha256').update(filePath).digest('hex');
-  return path.join(CACHE_DIR, `${digest}.webp`);
+  return path.join(CACHE_DIR, `${digest}${suffix}.webp`);
+}
+
+// Concurrency limiter for CPU/memory-heavy thumbnail generation (e.g. PSD parsing).
+// Allows fast, staggered processing (cascade) without starving CPU or locking the event loop.
+const MAX_CONCURRENT_GENERATIONS = 2;
+let activeGenerations = 0;
+const generationQueue = [];
+const inFlightGenerations = new Map();
+
+function enqueueGenerationTask(taskFn) {
+  return new Promise((resolve, reject) => {
+    generationQueue.push({ taskFn, resolve, reject });
+    processNextGenerationTask();
+  });
+}
+
+function processNextGenerationTask() {
+  if (activeGenerations >= MAX_CONCURRENT_GENERATIONS || generationQueue.length === 0) {
+    return;
+  }
+
+  const { taskFn, resolve, reject } = generationQueue.shift();
+  activeGenerations++;
+
+  Promise.resolve()
+    .then(taskFn)
+    .then(resolve, reject)
+    .finally(() => {
+      activeGenerations--;
+      processNextGenerationTask();
+    });
+}
+
+// Generates or awaits an in-flight generation task for a specific cache output file
+function generateThumbnailCached(cachePath, generateFn) {
+  if (fs.existsSync(cachePath)) {
+    return Promise.resolve(cachePath);
+  }
+
+  if (inFlightGenerations.has(cachePath)) {
+    return inFlightGenerations.get(cachePath);
+  }
+
+  const promise = enqueueGenerationTask(async () => {
+    if (!fs.existsSync(cachePath)) {
+      await generateFn();
+    }
+    return cachePath;
+  }).finally(() => {
+    inFlightGenerations.delete(cachePath);
+  });
+
+  inFlightGenerations.set(cachePath, promise);
+  return promise;
+}
+
+async function renderPsdToWebp(filePath, outputPath, width) {
+  const buffer = await fs.promises.readFile(filePath);
+  // Yield briefly to event loop before synchronous parsing
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const psd = readPsd(buffer, {
+    useImageData: true,
+    skipLayerImageData: true,
+    useRawThumbnail: true,
+  });
+
+  if (psd.imageData && psd.imageData.data) {
+    const rawBuffer = Buffer.from(
+      psd.imageData.data.buffer,
+      psd.imageData.data.byteOffset,
+      psd.imageData.data.byteLength
+    );
+    let pipeline = sharp(rawBuffer, {
+      raw: {
+        width: psd.imageData.width || psd.width,
+        height: psd.imageData.height || psd.height,
+        channels: 4,
+      },
+    });
+
+    if (width) {
+      pipeline = pipeline.resize({ width, fit: 'inside', withoutEnlargement: true });
+    }
+
+    await pipeline.webp({ quality: 80 }).toFile(outputPath);
+    return;
+  }
+
+  const rawThumbnail = psd.thumbnailRaw || (psd.imageResources && psd.imageResources.thumbnailRaw);
+  if (rawThumbnail) {
+    let pipeline = sharp(rawThumbnail);
+    if (width) {
+      pipeline = pipeline.resize({ width, fit: 'inside', withoutEnlargement: true });
+    }
+    await pipeline.webp({ quality: 80 }).toFile(outputPath);
+    return;
+  }
+
+  throw new Error('No composite image or thumbnail found in PSD file.');
 }
 
 // Everything's JSON only includes "path" (the parent folder) and "size" when
@@ -164,6 +277,26 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
+// Deletes every cached thumbnail file so the next /api/thumbnail request for
+// each image regenerates it from scratch. Used by the frontend's "refresh
+// thumbnails" button.
+app.delete('/api/thumbnails', (_req, res) => {
+  try {
+    const entries = fs.readdirSync(CACHE_DIR);
+
+    for (const entry of entries) {
+      fs.rmSync(path.join(CACHE_DIR, entry), { force: true });
+    }
+
+    return res.json({ ok: true, removed: entries.length });
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Unable to clear thumbnail cache.',
+      details: error.message,
+    });
+  }
+});
+
 app.get('/api/thumbnail', async (req, res) => {
   const filePath = parseFilePath(req.query.path);
   const width = Math.max(32, Math.min(800, Number(req.query.w || 200)));
@@ -184,10 +317,16 @@ app.get('/api/thumbnail', async (req, res) => {
 
   try {
     if (!fs.existsSync(cachePath)) {
-      await sharp(filePath)
-        .resize({ width, fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 75 })
-        .toFile(cachePath);
+      await generateThumbnailCached(cachePath, async () => {
+        if (isPsdFile(filePath)) {
+          await renderPsdToWebp(filePath, cachePath, width);
+        } else {
+          await sharp(filePath)
+            .resize({ width, fit: 'inside', withoutEnlargement: true })
+            .webp({ quality: 75 })
+            .toFile(cachePath);
+        }
+      });
     }
 
     return res.type('image/webp').sendFile(cachePath);
@@ -202,8 +341,9 @@ app.get('/api/thumbnail', async (req, res) => {
 // Serves the original, full-resolution image file (unlike /api/thumbnail,
 // which returns a resized/cached preview) for use in the frontend's
 // lightbox. Sent inline so it renders directly instead of prompting a
-// download like /api/download does.
-app.get('/api/preview', (req, res) => {
+// download like /api/download does. For PSD files, converts to a WebP
+// preview because browsers cannot display raw PSD files natively.
+app.get('/api/preview', async (req, res) => {
   const filePath = parseFilePath(req.query.path);
 
   if (!filePath) {
@@ -216,6 +356,24 @@ app.get('/api/preview', (req, res) => {
 
   if (!fs.statSync(filePath).isFile() || !isImageFile(filePath)) {
     return res.status(415).json({ error: 'Unsupported file type for preview.' });
+  }
+
+  if (isPsdFile(filePath)) {
+    const previewCachePath = getCachePath(filePath, '_preview');
+    try {
+      if (!fs.existsSync(previewCachePath)) {
+        await generateThumbnailCached(previewCachePath, async () => {
+          await renderPsdToWebp(filePath, previewCachePath, 1920);
+        });
+      }
+      res.set('Content-Disposition', 'inline');
+      return res.type('image/webp').sendFile(previewCachePath);
+    } catch (error) {
+      return res.status(500).json({
+        error: 'Unable to generate PSD preview.',
+        details: error.message,
+      });
+    }
   }
 
   res.set('Content-Disposition', 'inline');
