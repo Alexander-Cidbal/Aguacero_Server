@@ -7,8 +7,9 @@ import {
   FILE_TYPE_FILTERS,
   SORT_OPTIONS,
 } from "./searchFilters";
-import React from "react";
+
 import { DotLottieReact } from "@lottiefiles/dotlottie-react";
+import windAndRainLottie from "./assets/Wind and rain.lottie?url";
 
 type SearchResult = {
   name: string;
@@ -363,7 +364,7 @@ function App() {
           <div className="brand-media">
             <DotLottieReact
               className="brand-lottie"
-              src="/src/assets/Wind and rain.lottie"
+              src={windAndRainLottie}
               loop
               autoplay
             />
