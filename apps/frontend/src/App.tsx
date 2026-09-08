@@ -202,17 +202,54 @@ function useDebouncedValue(value: string, delay: number) {
   return debouncedValue;
 }
 
+// Persiste un valor en localStorage (por navegador/dispositivo, nunca se
+// envía al servidor) para que la última búsqueda sobreviva a cambios de
+// pestaña, recargas o cierre del navegador en ese mismo dispositivo.
+function usePersistentState<T>(
+  storageKey: string,
+  defaultValue: T,
+  isValid?: (value: T) => boolean,
+) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const stored = window.localStorage.getItem(storageKey);
+      if (stored === null) return defaultValue;
+      const parsed = JSON.parse(stored) as T;
+      if (isValid && !isValid(parsed)) return defaultValue;
+      return parsed;
+    } catch {
+      return defaultValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(value));
+    } catch {
+      // localStorage no disponible (modo privado, cuota excedida, etc.)
+    }
+  }, [storageKey, value]);
+
+  return [value, setValue] as const;
+}
+
 function App() {
-  const [query, setQuery] = useState("zapato");
+  const [query, setQuery] = usePersistentState("aguacero-search:query", "zapato");
   const debouncedQuery = useDebouncedValue(query, 180);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [columnCount, setColumnCount] = useState(3);
-  const [fileTypeFilterId, setFileTypeFilterId] = useState(
+  const [fileTypeFilterId, setFileTypeFilterId] = usePersistentState(
+    "aguacero-search:fileType",
     DEFAULT_FILE_TYPE_FILTER_ID,
+    (id) => FILE_TYPE_FILTERS.some((filter) => filter.id === id),
   );
-  const [sortOptionId, setSortOptionId] = useState(DEFAULT_SORT_OPTION_ID);
+  const [sortOptionId, setSortOptionId] = usePersistentState(
+    "aguacero-search:sort",
+    DEFAULT_SORT_OPTION_ID,
+    (id) => SORT_OPTIONS.some((option) => option.id === id),
+  );
   const [previewItem, setPreviewItem] = useState<SearchResult | null>(null);
   const [isRefreshingThumbnails, setIsRefreshingThumbnails] = useState(false);
   const [thumbnailRefreshToken, setThumbnailRefreshToken] = useState(0);
