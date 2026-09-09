@@ -59,6 +59,38 @@ function triggerDownload(url: string) {
   link.remove();
 }
 
+async function shareFile(url: string, fileName: string) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Error ${response.status}: no se pudo obtener el archivo.`);
+    }
+
+    const blob = await response.blob();
+    const file = new File([blob], fileName, {
+      type: blob.type || "application/octet-stream",
+    });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: fileName,
+      });
+      return;
+    }
+
+    // Fallback en caso de que el navegador o SO no soporte compartir archivos nativamente
+    triggerDownload(url);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "AbortError") {
+      // El usuario canceló la hoja nativa de compartir
+      return;
+    }
+    // Fallback a descarga regular si falla la API
+    triggerDownload(url);
+  }
+}
+
 function DownloadIcon() {
   return (
     <svg
@@ -74,6 +106,49 @@ function DownloadIcon() {
         strokeWidth="2"
         stroke="currentColor"
         d="M6 21H18M12 3V17M12 17L17 12M12 17L7 12"
+      />
+    </svg>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      height="18px"
+      width="18px"
+    >
+      <path
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        strokeWidth="2"
+        stroke="currentColor"
+        d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
+      />
+    </svg>
+  );
+}
+
+function SpinnerIcon() {
+  return (
+    <svg
+      className="spin-animate"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      height="18px"
+      width="18px"
+    >
+      <circle
+        cx="12"
+        cy="12"
+        r="9"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeDasharray="28.27 28.27"
+        strokeLinecap="round"
       />
     </svg>
   );
@@ -134,11 +209,13 @@ function ThumbnailImage({
 }: ThumbnailImageProps) {
   const [hasLoaded, setHasLoaded] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
 
   // Reset loading/error state if path or refresh token changes
   useEffect(() => {
     setHasLoaded(false);
     setHasError(false);
+    setIsSharing(false);
   }, [item.path, refreshToken]);
 
   const extensionLabel =
@@ -149,21 +226,45 @@ function ThumbnailImage({
   const shouldRenderImage =
     item.isImage && Boolean(item.thumbnailUrl) && !hasError;
 
+  const handleShare = async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (isSharing || !item.downloadUrl) return;
+
+    setIsSharing(true);
+    try {
+      await shareFile(`${BACKEND_URL}${item.downloadUrl}`, item.name);
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
   return (
     <div className={`thumb-wrap${isZoomable ? " thumb-wrap--zoomable" : ""}`}>
       {item.type === "file" && item.downloadUrl ? (
-        <button
-          type="button"
-          className="download-btn"
-          title="Download"
-          aria-label={`Descargar ${item.name}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            triggerDownload(`${BACKEND_URL}${item.downloadUrl}`);
-          }}
-        >
-          <DownloadIcon />
-        </button>
+        <div className="thumb-actions">
+          <button
+            type="button"
+            className="thumb-action-btn download-btn"
+            title="Descargar"
+            aria-label={`Descargar ${item.name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              triggerDownload(`${BACKEND_URL}${item.downloadUrl}`);
+            }}
+          >
+            <DownloadIcon />
+          </button>
+          <button
+            type="button"
+            className="thumb-action-btn share-btn"
+            title={isSharing ? "Preparando archivo…" : "Compartir"}
+            aria-label={`Compartir ${item.name}`}
+            disabled={isSharing}
+            onClick={handleShare}
+          >
+            {isSharing ? <SpinnerIcon /> : <ShareIcon />}
+          </button>
+        </div>
       ) : null}
 
       <div
